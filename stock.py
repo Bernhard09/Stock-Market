@@ -1,327 +1,153 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pandas_datareader as data
 import yfinance as yf
 from keras.models import load_model
 import streamlit as st
-import plotly.graph_objs as go
 import datetime
 
-# Set the background image using HTML and CSS
-
+# --- Konfigurasi Awal ---
 today = datetime.date.today()
 start = '2010-01-01'
 end = today.strftime('%Y-%m-%d')
 
-st.title("Predictive Analysis of Stock Market Trends:           ")
+st.title("Predictive Analysis of Stock Market Trends")
 
-user_input=st.text_input("Enter the Stock Tickter","AAPL", key="stock_symbol")
-df = yf.download(user_input, start=start, end=end)
+user_input = st.text_input("Enter the Stock Ticker", "AAPL", key="stock_symbol")
+df = yf.download(user_input, start=start, end=end, auto_adjust=False)
 
-st.subheader("Data from 2010 to 2023")
-data1 = pd.DataFrame(df)
+st.subheader("Data Overview (Recent 15 Days)")
+st.dataframe(df.tail(15))
 
-st.dataframe(data1.tail(15))
+# --- Bagian Visualisasi Moving Average ---
+def plot_ma(data, window, title):
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ma = data.rolling(window).mean()
+    ax.plot(data, label='Original Close')
+    ax.plot(ma, label=f'MA {window}')
+    ax.set_title(title)
+    ax.legend()
+    return fig
 
-
-#Closing price with month and year using moving average
-fig_all = plt.figure(figsize=(18, 12))
-plt.plot(df.Close)
-
-ma30 = df.Close.rolling(30).mean()
-fig_ma30 = plt.figure(figsize=(12, 6))
-plt.plot(ma30)
-
-ma365 = df.Close.rolling(365).mean()
-fig_ma365 = plt.figure(figsize=(12, 6))
-plt.plot(ma365)
-
-button_container = st.columns(3)
-
-# Create buttons for each plot
-if button_container[0].button("Show Closing Prices"):
-    st.subheader("Closing Price VS Time Chart")
+col1, col2, col3 = st.columns(3)
+if col1.button("Show Closing Prices"):
+    fig_all, ax = plt.subplots(figsize=(12,6))
+    ax.plot(df.Close)
     st.pyplot(fig_all)
 
-if button_container[1].button("Show MA30"):
-    st.subheader("Closing Price of 30 days")
-    st.pyplot(fig_ma30)
+if col2.button("Show MA30"):
+    st.pyplot(plot_ma(df.Close, 30, "Closing Price - 30 Days MA"))
 
-if button_container[2].button("Show MA365"):
-    st.subheader("Closing Price of 365 days")
-    st.pyplot(fig_ma365)
-#load my model
-model=load_model("keras model.h5")
+if col3.button("Show MA365"):
+    st.pyplot(plot_ma(df.Close, 365, "Closing Price - 365 Days MA"))
 
+# --- Load Model ---
+# Pastikan file model ada di folder yang sama
+try:
+    # Ganti 'keras model.h5' menjadi 'keras_model.keras'
+    model = load_model("keras_model.keras") 
+except Exception as e:
+    st.error(f"Model tidak ditemukan atau error: {e}")
+    st.stop()
 
-#Splitting Data into Training and Testing using MinMaxScaler
-
-data_training = pd.DataFrame(df['Close'][0: int(len(df)*0.70)])
-data_testing= pd.DataFrame(df['Close'][int(len(df)*0.70): int(len(df))])
-from sklearn.preprocessing import MinMaxScaler
-scaler = MinMaxScaler(feature_range=(0,1))
-data_training_array= scaler.fit_transform(data_training)
-data_testing_array= scaler.fit_transform(data_testing)
-
-
-past_100_days = data_training.tail(100)
-final_df = past_100_days._append(data_testing, ignore_index=True)
-
-input_data=scaler.fit_transform(final_df)
-
-x_test = []
-y_test = []
-
-for i in range(100, input_data.shape[0]):
-    x_test.append(input_data[i-100: i])
-    y_test.append(input_data[i, 0])
-
-x_test , y_test =np.array(x_test) , np.array(y_test);
-
-#predication making
-test_predication = model.predict(x_test)
-scaler.scale_
-
-scaling_factor = 1/scaler.scale_[0]
-y_test = y_test*scaling_factor
-test_predication=test_predication*scaling_factor
-
-st.subheader("predication vs orignal")
-fig2=plt.figure(figsize=(12,6))
-plt.plot(y_test, 'b', label = 'Original Price')
-plt.plot(test_predication,'r', label ='Preditemp_inputcted Price')
-plt.xlabel('Time')
-plt.ylabel('Price')
-plt.legend()
-st.pyplot(fig2)
-
-
-# demonstrate prediction for next 50 days  with closing price
-x_input=data_testing_array[len(data_testing_array) - 100:].reshape(1,-1)
-opening=list(x_input)
-opening=opening[0].tolist()
-
-from numpy import array
-lst_output=[]
-n_steps=100
-i=0
-while(i<50):
-
-    if(len(opening)>100):
-        #print(opening)
-        x_input=np.array(opening[1:])
-        #print("{} day input {}".format(i,x_input))
-        x_input=x_input.reshape(1,-1)
-        x_input = x_input.reshape((1, n_steps, 1))
-        #print(x_input)
+# --- Fungsi Helper Prediksi (Refactored) ---
+def predict_next_50_days(series, model, n_steps=100):
+    from sklearn.preprocessing import MinMaxScaler
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    
+    # 1. Pastikan data di-scale dan di-flatten jadi list angka biasa (1D)
+    data_scaled = scaler.fit_transform(np.array(series).reshape(-1, 1))
+    # Kita gunakan .flatten() agar isinya [0.1, 0.2, ...] bukan [[0.1], [0.2], ...]
+    temp_list = data_scaled[-n_steps:].flatten().tolist() 
+    
+    predictions = []
+    
+    for _ in range(50):
+        # 2. Ambil 100 data terakhir, ubah format ke (1, 100, 1) sesuai mau model
+        x_input = np.array(temp_list[-n_steps:]).reshape(1, n_steps, 1)
+        
+        # 3. Prediksi (hasilnya biasanya berbentuk array 2D seperti [[0.5]])
         yhat = model.predict(x_input, verbose=0)
-        #print("{} day output {}".format(i,yhat))
-        opening.extend(yhat[0].tolist())
-        opening=opening[1:]
-        #print(opening)
-        lst_output.extend(yhat.tolist())
-        i=i+1
-    else:
-        x_input = x_input.reshape((1,n_steps,1))
-        yhat = model.predict(x_input, verbose=0)
-        opening.extend(yhat[0].tolist()) 
-        lst_output.extend(yhat.tolist())
-        i=i+1
-
-lst_output=scaler.inverse_transform(lst_output)
-arr = lst_output
-
-
-
-#opening
-#Splitting Data into Training and Testing
-
-data_training_open = pd.DataFrame(df['Open'][0: int(len(df)*0.70)])
-data_testing_open= pd.DataFrame(df['Open'][int(len(df)*0.70): int(len(df))])
-from sklearn.preprocessing import MinMaxScaler
-scaler_open = MinMaxScaler(feature_range=(0,1))
-
-data_testing_array_open= scaler_open.fit_transform(data_testing_open)
-x_input_open=data_testing_array_open[len(data_testing_array_open) - 100:].reshape(1,-1)
-temp_input_open=list(x_input_open)
-temp_input_open=temp_input_open[0].tolist()
-
-from numpy import array
-
-lst_output_open=[]
-n_steps=100
-i=0
-while(i<50):
-
-    if(len(temp_input_open)>100):
-        #print(temp_input)
-        x_input_open=np.array(temp_input_open[1:])
-        #print("{} day input {}".format(i,x_input_open))
-        x_input_open=x_input_open.reshape(1,-1)
-        x_input_open = x_input_open.reshape((1, n_steps, 1))
-        #print(x_input)
-        yhat_open = model.predict(x_input_open, verbose=0)
         
-        temp_input_open.extend(yhat_open[0].tolist())
-        temp_input_open=temp_input_open[1:]
-        #print(temp_input)
-        lst_output_open.extend(yhat_open.tolist())
-        i=i+1
-    else:
-        x_input_open = x_input_open.reshape((1,n_steps,1))
-        yhat_open = model.predict(x_input_open, verbose=0)
-        temp_input_open.extend(yhat_open[0].tolist())
-        lst_output_open.extend(yhat_open.tolist())
-        i=i+1
-
-lst_output_open=scaler_open.inverse_transform(lst_output_open)
-arr_open = lst_output_open
-
-#High
-#Splitting Data into Training and Testing
-
-data_training_high = pd.DataFrame(df['High'][0: int(len(df)*0.70)])
-data_testing_high= pd.DataFrame(df['High'][int(len(df)*0.70): int(len(df))])
-from sklearn.preprocessing import MinMaxScaler
-scaler_high = MinMaxScaler(feature_range=(0,1))
-
-data_testing_array_high= scaler_high.fit_transform(data_testing_high)
-x_input_high=data_testing_array_high[len(data_testing_array_high) - 100:].reshape(1,-1)
-temp_input_high=list(x_input_high)
-temp_input_high=temp_input_high[0].tolist()
-
-from numpy import array
-
-lst_output_high=[]
-n_steps=100
-i=0
-while(i<50):
-
-    if(len(temp_input_high)>100):
-        #print(temp_input)
-        x_input_high=np.array(temp_input_high[1:])
-        #print("{} day input {}".format(i,x_input_high))
-        x_input_high=x_input_high.reshape(1,-1)
-        x_input_high = x_input_high.reshape((1, n_steps, 1))
-        #print(x_input)
-        yhat_high = model.predict(x_input_high, verbose=0)
+        # 4. Ambil angkanya saja secara spesifik
+        pred_val = float(yhat[0][0])
         
-        temp_input_high.extend(yhat_high[0].tolist())
-        temp_input_high=temp_input_high[1:]
-        #print(temp_input)
-        lst_output_high.extend(yhat_high.tolist())
-        i=i+1
-    else:
-        x_input_high = x_input_high.reshape((1,n_steps,1))
-        yhat_high = model.predict(x_input_high, verbose=0)
-        temp_input_high.extend(yhat_high[0].tolist())
-        lst_output_high.extend(yhat_high.tolist())
-        i=i+1
-
-lst_output_high=scaler_high.inverse_transform(lst_output_high)
-arr_high = lst_output_high
-
-#low
-#Splitting Data into Training and Testing
-
-data_training_Low = pd.DataFrame(df['Low'][0: int(len(df)*0.70)])
-data_testing_Low= pd.DataFrame(df['Low'][int(len(df)*0.70): int(len(df))])
-from sklearn.preprocessing import MinMaxScaler
-scaler_Low = MinMaxScaler(feature_range=(0,1))
-
-data_testing_array_Low= scaler_Low.fit_transform(data_testing_Low)
-x_input_Low=data_testing_array_Low[len(data_testing_array_Low) - 100:].reshape(1,-1)
-temp_input_Low=list(x_input_Low)
-temp_input_Low=temp_input_Low[0].tolist()
-
-from numpy import array
-
-lst_output_Low=[]
-n_steps=100
-i=0
-while(i<50):
-
-    if(len(temp_input_Low)>100):
-        #print(temp_input)
-        x_input_Low=np.array(temp_input_Low[1:])
-        #print("{} day input {}".format(i,x_input_Low))
-        x_input_Low=x_input_Low.reshape(1,-1)
-        x_input_Low = x_input_Low.reshape((1, n_steps, 1))
-        #print(x_input)
-        yhat_Low = model.predict(x_input_Low, verbose=0)
+        # 5. Masukkan angkanya ke temp_list untuk bahan prediksi besok
+        temp_list.append(pred_val)
         
-        temp_input_Low.extend(yhat_Low[0].tolist())
-        temp_input_Low=temp_input_Low[1:]
-        #print(temp_input)
-        lst_output_Low.extend(yhat_Low.tolist())
-        i=i+1
-    else:
-        x_input_Low = x_input_Low.reshape((1,n_steps,1))
-        yhat_Low = model.predict(x_input_Low, verbose=0)
-        temp_input_Low.extend(yhat_Low[0].tolist())
-        lst_output_Low.extend(yhat_Low.tolist())
-        i=i+1
+        # 6. Simpan hasil prediksi untuk di-inverse transform nanti
+        predictions.append([pred_val])
+        
+    return scaler.inverse_transform(predictions)
 
-lst_output_Low=scaler_Low.inverse_transform(lst_output_Low)
-arr_Low = lst_output_Low
+# --- Proses Prediksi ---
+st.subheader("Future Prediction (Next 50 Days)")
 
-h = pd.DataFrame(arr_Low, columns=['Low'])
+# Melakukan prediksi untuk setiap kolom
+pred_close = predict_next_50_days(df['Close'], model)
+pred_open  = predict_next_50_days(df['Open'], model)
+pred_high  = predict_next_50_days(df['High'], model)
+pred_low   = predict_next_50_days(df['Low'], model)
 
-g = pd.DataFrame(arr_high, columns=['High'])
+# Menggabungkan hasil
+result_df = pd.DataFrame({
+    'Low': pred_low.flatten(),
+    'High': pred_high.flatten(),
+    'Open': pred_open.flatten(),
+    'Close': pred_close.flatten()
+})
 
-f = pd.DataFrame(arr_open, columns=['Open'])
+# --- Visualisasi Candlestick dengan Matplotlib ---
+def plot_matplotlib_candlestick(data):
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Tentukan warna (Hijau jika Close > Open, Merah jika sebaliknya)
+    colors = ['green' if c >= o else 'red' for c, o in zip(data['Close'], data['Open'])]
+    
+    # Gambar garis High-Low (Wick)
+    ax.vlines(data.index, data['Low'], data['High'], color='black', linewidth=1)
+    
+    # Gambar badan candle (Open-Close)
+    ax.bar(data.index, data['Close'] - data['Open'], bottom=data['Open'], color=colors, width=0.6)
+    
+    ax.set_title("Predicted Candlestick Chart (Next 50 Days)")
+    ax.set_xlabel("Days Forward")
+    ax.set_ylabel("Price")
+    ax.grid(axis='y', linestyle='--', alpha=0.7)
+    return fig
 
-k =pd.DataFrame(arr, columns=['Close'])
-
-
-
-k['DailyChange'] = k['Close'].diff()
-k['PercentageChange'] = (k['DailyChange'] / k['Close'].shift(1)) * 100
-k['PercentageChange'] = k['PercentageChange'].map("{:.2f}%".format)
-result_df = pd.concat([h, g, f, k], axis=1)
-
-fig = go.Figure(data=[go.Candlestick(x=result_df.index,
-                open=result_df['Open'],
-                high=result_df['High'],
-                low=result_df['Low'],
-                close=result_df['Close'])])
-
-st.plotly_chart(fig)
-
-# Display the styled DataFrame using Streamlit
+st.pyplot(plot_matplotlib_candlestick(result_df))
 st.write(result_df)
 
-
-fig3= plt.figure(figsize=(12,6))
-plt.plot(k.Close)
-st.pyplot(fig3)
-
-
-st.title("Next 5 Years Returns")
-
-# Input for the stock symbol
-symbol = user_input
-
-# Check for changes in the input field
-if st.session_state.stock_symbol is not None:
-    try:
-        # Download historical data
-        stock_data = yf.download(symbol, start="2023-01-01", end="2028-01-01")
-
-        # Calculate returns over the next 5 years
-        returns_next_5_years = (stock_data['Adj Close'].iloc[-1] / stock_data['Adj Close'].iloc[0] - 1) * 100
-
-        # Display the returns
-        st.write(f"{symbol} returns over the next 5 years: {returns_next_5_years:.2f}%")
-        st.write("Recommendation Moodel")
-        if returns_next_5_years >= 0:
-            st.markdown('<div style="padding: 10px; color: white; background-color: green; text-align: center;">Yes</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div style="padding: 10px; color: white; background-color: red; text-align: center;">No</div>', unsafe_allow_html=True)
-
-    except Exception as e:
-        st.write(f"Error: {str(e)}")
-
+# --- Analisis Return 5 Tahun ---
+st.title("Estimated 5-Year Outlook")
+try:
+    # Pastikan variabel 'end' sudah didefinisikan di awal (today)
+    stock_data = yf.download(user_input, start="2023-01-01", end=end, auto_adjust=False)
     
+    if not stock_data.empty:
+        # Perbaikan: Ambil kolom spesifik sesuai ticker agar menjadi Series tunggal
+        # Jika yfinance mengembalikan MultiIndex, kita akses [Level0][Level1]
+        if isinstance(stock_data.columns, pd.MultiIndex):
+            adj_close_series = stock_data['Adj Close'][user_input]
+        else:
+            adj_close_series = stock_data['Adj Close']
 
+        price_start = adj_close_series.iloc[0]
+        price_end = adj_close_series.iloc[-1]
+        
+        returns = (price_end / price_start - 1) * 100
+        
+        # Sekarang 'returns' adalah float murni, aman untuk diformat
+        st.write(f"Historical return since 2023 for {user_input}: {returns:.2f}%")
+        
+        if returns >= 0:
+            st.success("Recommendation: YES (Based on current trend)")
+        else:
+            st.error("Recommendation: NO (Based on current trend)")
+    else:
+        st.warning("No data found for the selected ticker.")
+            
+except Exception as e:
+    # Ini akan menangkap error dan menampilkannya di UI Streamlit
+    st.warning(f"Could not calculate returns: {e}")
